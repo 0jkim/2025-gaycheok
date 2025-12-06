@@ -25,8 +25,10 @@
 #include "ns3/log.h"
 #include "ns3/spectrum-model.h"
 #include "ns3/uinteger.h"
+#include "ns3/nr-aoi-tag.h"
 
 #include <algorithm>
+#include <iostream>
 
 namespace ns3
 {
@@ -73,7 +75,7 @@ NrGnbMacMemberGnbCmacSapProvider::ConfigureMac(uint16_t ulBandwidth, uint16_t dl
 void
 NrGnbMacMemberGnbCmacSapProvider::AddUe(uint16_t rnti)
 {
-    m_mac->DoAddUe(rnti);
+    m_mac->DoAddUe(rnti);    
 }
 
 void
@@ -740,7 +742,7 @@ NrGnbMac::DoSlotUlIndication(const SfnSf& sfnSf, LteNrTddSlotType type)
 {
     NS_LOG_FUNCTION(this);
     NS_LOG_LOGIC("Perform things on UL, slot on the air: " << sfnSf);
-
+    // std::cout<<"Called each tti " << sfnSf<<"\n";
     if (!m_receivedRachPreambleCount.empty())
     {
         ProcessRaPreambles(sfnSf);
@@ -786,6 +788,27 @@ NrGnbMac::DoSlotUlIndication(const SfnSf& sfnSf, LteNrTddSlotType type)
 
         for (const auto& v : ulMacReq.m_macCeList)
         {
+            /**
+             * BSR을 포함한 MAC 제어 요소가 수집되는 벡터 정보를 수집해서 스케줄러에게 전달
+             */
+            if(v.m_macCeType == MacCeElement::BSR)
+            {
+                uint16_t rnti = v.m_rnti;
+                double totalBufferSize = 0;
+                for(const auto &bsrIndex : v.m_macCeValue.m_bufferStatus)
+                {
+                    uint64_t bufferSizeInBytes = NrMacShortBsrCe::FromLevelToBytes(bsrIndex);
+                    // std::cout<<"gNB received rnti "<<rnti<<"'s BSR. BSR size is "<<bufferSizeInBytes<<"\n";
+                    totalBufferSize += bufferSizeInBytes;
+                }
+
+                auto it = m_ueAoiTable.find(rnti);
+                if (it != m_ueAoiTable.end())
+                {
+                    it->second.m_bufferSizeByte = totalBufferSize;
+                }
+            }
+
             Ptr<NrBsrMessage> msg = Create<NrBsrMessage>();
             msg->SetBsr(v);
             m_macRxedCtrlMsgsTrace(m_currentSlot, GetCellId(), v.m_rnti, GetBwpId(), msg);
@@ -796,6 +819,7 @@ NrGnbMac::DoSlotUlIndication(const SfnSf& sfnSf, LteNrTddSlotType type)
 
     ulParams.m_snfSf = sfnSf;
     ulParams.m_slotType = type;
+    ulParams.m_aoiTableMap = UpdateAllUeAoi();
 
     // Forward UL HARQ feebacks collected during last TTI
     if (!m_ulHarqInfoReceived.empty())
@@ -804,7 +828,7 @@ NrGnbMac::DoSlotUlIndication(const SfnSf& sfnSf, LteNrTddSlotType type)
         // empty local buffer
         m_ulHarqInfoReceived.clear();
     }
-
+    
     m_macSchedSapProvider->SchedUlTriggerReq(ulParams);
 }
 
@@ -933,9 +957,35 @@ NrGnbMac::DoReceivePhyPdu(Ptr<Packet> p)
     }
 
     // Ok, we know it is data, so let's extract and pass to RLC.
+    /**
+     * Extract and calculated packet
+     */
+    NrAoiTag aoiTag;
+    if (p->PeekPacketTag(aoiTag))
+    {
+        Time packetCreationTime = aoiTag.GetCTimeStamp();
+        Time aoi = Simulator::Now() - packetCreationTime;
+        m_ueAoiSamples[rnti].push_back(aoi.GetNanoSeconds());
+    }
 
     NrMacHeaderVs macHeader;
     p->RemoveHeader(macHeader);
+
+    // The size of the RLC PDU is the packet size after stripping the MAC header.
+    uint64_t rlcPduSize = p->GetSize();
+    // std::cout<<"gNB received rnti "<<rnti <<"'s packet. Size of packet is "<<rlcPduSize<<".\n";
+    // Decrement buffer size in AoI table
+    auto aoiTableIt = m_ueAoiTable.find(rnti);
+    if (aoiTableIt != m_ueAoiTable.end())
+    {
+        if (aoiTableIt->second.m_bufferSizeByte >= rlcPduSize)
+        {
+            aoiTableIt->second.m_bufferSizeByte -= rlcPduSize;
+        }
+        else
+            aoiTableIt->second.m_bufferSizeByte = 0;
+        // std::cout<<"And rest of buffer size is "<<aoiTableIt->second.m_bufferSizeByte<<"\n";
+    }
 
     auto lcidIt = rntiIt->second.find(macHeader.GetLcId());
     if (lcidIt == rntiIt->second.end())
@@ -1044,6 +1094,22 @@ void
 NrGnbMac::DoUlHarqFeedback(const UlHarqInfo& params)
 {
     NS_LOG_FUNCTION(this);
+
+    // Harq Ok를 받으면 패킷이 성공적으로 수신되었기때문에 현재 시각으로 마지막 패킷 생성시간 변수 초기화
+    if(params.m_receptionStatus == UlHarqInfo::Ok)
+    {
+        auto it = m_ueAoiTable.find(params.m_rnti);
+        if(it != m_ueAoiTable.end())
+        {   
+            it->second.m_lastSuccessTxTime = Simulator::Now();
+            if(it->second.m_bufferSizeByte == 0)
+            {
+                // std::cout << "RNTI " << params.m_rnti << " buffer is empty. Resetting AoI timer.\n";
+            }
+            
+        }
+    }
+
     m_ulHarqInfoReceived.push_back(params);
 }
 
@@ -1371,6 +1437,9 @@ NrGnbMac::DoConfigureMac(uint16_t ulBandwidth, uint16_t dlBandwidth)
 
     params.m_ulBandwidth = m_bandwidthInRbg;
     params.m_dlBandwidth = m_bandwidthInRbg;
+    
+    // numerology 별 tti로 m_tti 초기화
+    m_tti = m_phySapProvider->GetSlotPeriod();
 
     m_macCschedSapProvider->CschedCellConfigReq(params);
 }
@@ -1470,6 +1539,9 @@ NrGnbMac::DoAddUe(uint16_t rnti)
         Ptr<PacketBurst> pb = CreateObject<PacketBurst>();
         buf.at(i).m_pktBurst = pb;
     }
+
+    m_ueAoiTable[rnti] = UeAoiInfo();
+
     m_miDlHarqProcessesPackets.insert(std::pair<uint16_t, NrDlHarqProcessesBuffer_t>(rnti, buf));
 }
 
@@ -1501,6 +1573,8 @@ NrGnbMac::DoRemoveUe(uint16_t rnti)
             ++jt;
         }
     }
+    m_ueAoiTable.erase(rnti);
+
 }
 
 void
@@ -1710,6 +1784,40 @@ NrGnbMac::DoCschedCellConfigUpdateInd(
     NrMacCschedSapUser::CschedCellConfigUpdateIndParameters params)
 {
     NS_LOG_FUNCTION(this);
+}
+
+void
+NrGnbMac::PrintAoiStatistics() const
+{
+    double totalAoiSum = 0;
+    uint64_t totalAoiCount = 0;
+    std::cout << "\n--- AoI Statistics ---" << std::endl;
+
+    for (auto const& [rnti, samples] : m_ueAoiSamples)
+    {
+        if (!samples.empty())
+        {
+            double rntiAoiSum = 0;
+            for (double const& aoi : samples)
+            {
+                rntiAoiSum += aoi;
+            }
+            double rntiAvgAoi = rntiAoiSum / samples.size();
+            std::cout << "RNTI " << rnti << ": Average AoI = " << rntiAvgAoi << " ns, "
+                      << "Samples = " << samples.size() << std::endl;
+            
+            totalAoiSum += rntiAoiSum;
+            totalAoiCount += samples.size();
+        }
+    }
+
+    if (totalAoiCount > 0)
+    {
+        double overallAvgAoi = totalAoiSum / totalAoiCount;
+        std::cout << "Overall System Average AoI = " << overallAvgAoi << " ns, "
+                  << "Total Samples = " << totalAoiCount << std::endl;
+    }
+    std::cout << "----------------------" << std::endl;
 }
 
 } // namespace ns3

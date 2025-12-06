@@ -246,6 +246,13 @@ class NrMacSchedulerNs3 : public NrMacScheduler
 
   public:
     /**
+     * scheduler-ns3 용 rnti 별 aoi, bufferSize 맵 변수
+     * schedulerUeInfo에 AoI와 BufferSize를 반환할 수 있는 메서드
+     */
+    std::unordered_map<uint16_t, std::pair<double, double>> ns3_aoiTableMap;
+    double GetAoi(uint16_t rnti) const;
+    double GetBufferSize(uint16_t rnti) const;
+    /**
      * @brief GetTypeId
      * @return The TypeId of the class
      */

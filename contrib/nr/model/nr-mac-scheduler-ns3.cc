@@ -1352,6 +1352,7 @@ NrMacSchedulerNs3::ComputeActiveUe(ActiveUeMap* activeUe,
                 NS_LOG_INFO("UE " << ue->m_rnti << " " << mode << " LCG "
                                   << static_cast<uint32_t>(lcgInfo.first) << " bytes "
                                   << lcg->GetTotalSize());
+                // std::cout<<"Calculated ActiveUl Rnti ["<<ue->m_rnti<<"] Buffer size is "<<lcg->GetTotalSize()<<"\n";
             }
             totBuffer += lcg->GetTotalSize();
         }
@@ -2080,6 +2081,7 @@ NrMacSchedulerNs3::DoScheduleUl(const std::vector<UlHarqInfo>& ulHarqFeedback,
 
     if (ulSymAvail > 0 && !m_srList.empty())
     {
+        std::cout<<"Assign resource for sr message\n";
         DoScheduleUlSr(&ulAssignationStartPoint, m_srList);
         m_srList.clear();
     }
@@ -2533,6 +2535,28 @@ NrMacSchedulerNs3::DoSchedDlTriggerReq(
     ScheduleDl(params, dlHarqFeedback);
 }
 
+double NrMacSchedulerNs3::GetAoi(uint16_t rnti) const
+{   
+    auto it = ns3_aoiTableMap.find(rnti);
+    if(it != ns3_aoiTableMap.end())
+    {
+        return it->second.first;
+    }
+    return 0.0;
+    
+}
+
+double NrMacSchedulerNs3::GetBufferSize(uint16_t rnti) const
+{   
+    auto it = ns3_aoiTableMap.find(rnti);
+    if(it != ns3_aoiTableMap.end())
+    {
+        return it->second.second;
+    }
+    return 0.0;
+    
+}
+
 /**
  * @brief Decide how to fill the frequency/time of a UL slot
  * @param params parameters for the scheduler
@@ -2548,6 +2572,11 @@ NrMacSchedulerNs3::DoSchedUlTriggerReq(
     const NrMacSchedSapProvider::SchedUlTriggerReqParameters& params)
 {
     NS_LOG_FUNCTION(this);
+
+    /**
+     * scheduler-ns3에서 사용할 rnti 별 aoi, bufferSizeByte를 저장
+     */
+    ns3_aoiTableMap = params.m_aoiTableMap;
 
     // process received CQIs
     m_cqiManagement.RefreshUlCqiMaps(m_ueMap);

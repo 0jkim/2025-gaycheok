@@ -15,6 +15,8 @@
 #include "nr-phy-sap.h"
 
 #include "ns3/traced-callback.h"
+#include <vector>
+#include <map>
 
 namespace ns3
 {
@@ -175,6 +177,8 @@ class NrGnbMac : public Object
      */
     void BeamChangeReport(BeamId beamId, uint8_t rnti);
 
+    void PrintAoiStatistics() const;
+
     /**
      * TracedCallback signature for DL and UL data scheduling events.
      *
@@ -331,6 +335,50 @@ class NrGnbMac : public Object
     void DoBuildRarList(SlotAllocInfo& slotAllocInfo);
 
   private:
+    /**
+     * UeAoiInfo Struct:
+     * TTI 마다 1씩 증가하는 rnti 별 AoI 맵에 포함되는 멤버 변수들
+     */
+    struct UeAoiInfo
+    {
+      Time m_lastSuccessTxTime;
+      double m_bufferSizeByte;
+
+      UeAoiInfo() : m_lastSuccessTxTime(Simulator::Now()), m_bufferSizeByte(0.0) {}
+    };
+    std::map<uint16_t, UeAoiInfo> m_ueAoiTable;
+    Time m_tti;
+    std::map<uint16_t, std::vector<double>> m_ueAoiSamples;
+    
+    /**
+     * DoSlotUlIndication가 매 tti마다 호출됨
+     * 따라서 이 메서드로 스케줄링 결정에 사용되는 rnti 별 aoi 상태를 업데이트 해주어야함
+     */
+    std::unordered_map<uint16_t, std::pair<double, double>> UpdateAllUeAoi()
+    {
+      std::unordered_map<uint16_t, std::pair<double, double>> ueStateMap;
+      Time now = Simulator::Now();
+
+      for(auto & pair : m_ueAoiTable)
+      {
+        uint16_t rnti = pair.first;
+        UeAoiInfo& ueInfo = pair.second;
+        double aoiInMs = 0.0;
+
+        if(ueInfo.m_bufferSizeByte > 0)
+        {
+          Time aoi = now - ueInfo.m_lastSuccessTxTime;
+          aoiInMs = aoi.GetMilliSeconds();
+        }
+        else
+        {
+          ueInfo.m_lastSuccessTxTime = Simulator::Now();
+          aoiInMs = 0;
+        }
+        ueStateMap[pair.first] = {aoiInMs, ueInfo.m_bufferSizeByte};
+      }
+      return ueStateMap;
+    }
     bool HasMsg3Allocations(const SlotAllocInfo& slotInfo);
 
     struct NrDlHarqProcessInfo

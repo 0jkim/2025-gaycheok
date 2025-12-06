@@ -35,6 +35,7 @@
 #include <random>
 #include <vector>
 
+#include "ns3/nr-aoi-tag.h"
 
 using namespace ns3;
 
@@ -68,7 +69,7 @@ struct TrafficProfile {
  * IIoT Sensor Type 정의 해야함
  */
 static TrafficProfile kProfiles[] = {
-  {100, 20}
+  {500, 10}
 };
 
 class MyModel : public Application
@@ -198,10 +199,13 @@ void MyModel::SendPacketUl()
 
     /**
      * TODO: 0jkim
-     * 패킷 생성 시간 rlc로 테깅 -> LcObservation으로 접근가능한 구조
+     * 패킷 생성 시간 테그에 저장
      */
+    NrAoiTag aoiTag;
     Time now = Simulator::Now();
-    
+    aoiTag.SetCTimeStamp(now);
+    pkt->AddPacketTag(aoiTag);
+
     m_device->Send(pkt, m_addr, Ipv4L3Protocol::PROT_NUMBER);
     NS_LOG_INFO("Sending UL");
 
@@ -261,7 +265,7 @@ int main(int argc, char* argv[])
     double bandwidthBand1 = 20e6;
 
     uint16_t numGnb = 1;
-    uint16_t numUe = 30;    
+    uint16_t numUe = 100;    
     bool enableUl = true;
     
     uint32_t sizePacket = 512;
@@ -319,7 +323,7 @@ int main(int argc, char* argv[])
 
     NodeContainer gnbNode = gridHelper.GetBaseStations();
     NodeContainer ueNodes = gridHelper.GetUserTerminals();
-
+    
     NodeContainer mobileUeNodes;
     Ptr<ListPositionAllocator> mobileUePos = CreateObject<ListPositionAllocator>();
     for(uint32_t i=0;i<mobileUeNum;++i)
@@ -562,6 +566,17 @@ int main(int argc, char* argv[])
 
     Simulator::Stop(simTime);
     Simulator::Run();
+
+    // --- Print AoI Statistics ---
+    Ptr<NrGnbNetDevice> gnbNetDevice = DynamicCast<NrGnbNetDevice>(gnbNetDev.Get(0));
+    if (gnbNetDevice)
+    {
+        Ptr<NrGnbMac> gnbMac = DynamicCast<NrGnbMac>(gnbNetDevice->GetMac(0)); // Cast to NrGnbMac
+        if (gnbMac)
+        {
+            gnbMac->PrintAoiStatistics();
+        }
+    }
 
     std::cout << "\nAverage PDCP Delay (ns): " << averagePdcpDelayNs << "\n";
     std::cout << "\n FIN. " << std::endl;

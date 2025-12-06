@@ -87,6 +87,8 @@ class NrMacSchedSapProvider
         SfnSf m_snfSf;                                   //!< SfnSf
         std::vector<struct UlHarqInfo> m_ulHarqInfoList; //!< UL HARQ info list
         LteNrTddSlotType m_slotType{F};                  //!< Indicate the type of slot requested
+        
+        std::unordered_map<uint16_t, std::pair<double, double>> m_aoiTableMap;  // Key: rnti, Value: <aoi, bufferSize>
     };
 
     /**
